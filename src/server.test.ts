@@ -23,12 +23,14 @@ import { Lifecycle } from '@cloudsforge/lifecycle'
 import { DECIDE_SCOPE, createServer } from './server.ts'
 import {
   ALICE,
+  EVENT_SECRET,
   decideDeps,
   enabled,
   migrateTestDb,
   openDb,
   quietLogger,
   resetPolicy,
+  signedEvent,
   skip,
   testMetrics,
 } from './testsupport.ts'
@@ -86,7 +88,7 @@ interface Harness {
 }
 
 async function withServer(
-  options: { verifier?: Verifier } = {},
+  options: { verifier?: Verifier; eventAcceptSecrets?: readonly string[] } = {},
   fn: (h: Harness) => Promise<void>,
 ): Promise<void> {
   const lifecycle = new Lifecycle({ cacheMs: 0 })
@@ -97,6 +99,7 @@ async function withServer(
     metrics,
     verifier: options.verifier ?? workingVerifier(),
     sql: db(),
+    eventAcceptSecrets: options.eventAcceptSecrets ?? [EVENT_SECRET],
     decide: { ...decideDeps(db()), metrics, logger: quietLogger() },
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
@@ -444,5 +447,136 @@ test('a path parameter cannot swallow the rest of the path', { skip }, async () 
     // up reachable through a public one.
     const res = await fetch(`${h.url}/decisions/aaaa/bbbb`)
     assert.equal(res.status, 404)
+  })
+})
+
+/* ------------------------------------------------------------------ POST /v1/events */
+
+/**
+ * The first inbound event surface this service has ever had, and the only unauthenticated write on
+ * it. `erasure.test.ts` covers what erasure does to each table; these cover the door.
+ */
+
+async function postEvent(
+  h: Harness,
+  event: { body: string; headers: Record<string, string> },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(`${h.url}/v1/events`, {
+    method: 'POST',
+    headers: event.headers,
+    body: event.body,
+  })
+  const text = await res.text()
+  let body: Record<string, unknown> = {}
+  try {
+    body = JSON.parse(text) as Record<string, unknown>
+  } catch {
+    /* not JSON */
+  }
+  return { status: res.status, body }
+}
+
+async function aTrustedAddress(): Promise<void> {
+  await sql`
+    insert into trusted_addresses (subject, chain, address, effective_at, added_by)
+    values (${ALICE}, 'eth', '0xdestination', now() + interval '1 day', ${ALICE})
+  `
+}
+
+test('a wrongly signed erasure is 403 — never 401, and erases nothing', { skip }, async () => {
+  await withServer({}, async (h) => {
+    await aTrustedAddress()
+    // 401 would say "authenticate and try again", which sends a caller looking for a bearer token
+    // this route does not have. The MAC is the credential and it was wrong.
+    const forged = signedEvent(
+      'identity.user.deleted',
+      { userId: ALICE_ID },
+      { secret: 'a-different-secret-that-is-long-enough' },
+    )
+    assert.equal((await postEvent(h, forged)).status, 403)
+
+    const unsigned = signedEvent('identity.user.deleted', { userId: ALICE_ID })
+    assert.equal(
+      (await postEvent(h, { body: unsigned.body, headers: { 'content-type': 'application/json' } }))
+        .status,
+      403,
+    )
+
+    const rows = await sql`select count(*)::int as n from trusted_addresses`
+    assert.equal((rows[0] as { n: number }).n, 1)
+  })
+})
+
+test('the signature covers the bytes as sent, so a re-serialised body fails', { skip }, async () => {
+  await withServer({}, async (h) => {
+    const event = signedEvent('identity.user.deleted', { userId: ALICE_ID })
+    // Same JSON, different bytes. If the route parsed before verifying, this would pass.
+    const reserialised = JSON.stringify(JSON.parse(event.body), null, 2)
+    assert.equal(
+      (await postEvent(h, { body: reserialised, headers: event.headers })).status,
+      403,
+    )
+  })
+})
+
+test('a topic this service does not consume is 202 ignored, never 4xx', { skip }, async () => {
+  await withServer({}, async (h) => {
+    // A 4xx would pin the producer's relay in a retry loop for ever over something neither side is
+    // wrong about.
+    const res = await postEvent(h, signedEvent('identity.session.created', { userId: ALICE_ID }))
+    assert.equal(res.status, 202)
+    assert.equal(res.body['status'], 'ignored')
+  })
+})
+
+test('a correctly signed erasure is accepted, and erases', { skip }, async () => {
+  await withServer({}, async (h) => {
+    await aTrustedAddress()
+    const res = await postEvent(h, signedEvent('identity.user.deleted', { userId: ALICE_ID }))
+    assert.equal(res.status, 202)
+    assert.equal(res.body['status'], 'recorded')
+
+    const rows = await sql`select count(*)::int as n from trusted_addresses`
+    assert.equal((rows[0] as { n: number }).n, 0)
+  })
+})
+
+test('a redelivery is a duplicate, not a second erasure', { skip }, async () => {
+  await withServer({}, async (h) => {
+    await aTrustedAddress()
+    const event = signedEvent('identity.user.deleted', { userId: ALICE_ID })
+    assert.equal((await postEvent(h, event)).body['status'], 'recorded')
+    // Byte for byte, as an at-least-once relay resends it. The inbox is what makes it a no-op.
+    const again = await postEvent(h, event)
+    assert.equal(again.status, 202)
+    assert.equal(again.body['status'], 'duplicate')
+  })
+})
+
+test('an unreadable erasure is 400 and stays visible, never absorbed into a 202', { skip }, async () => {
+  await withServer({}, async (h) => {
+    // The relay retries a 400 for ever, which is correct here: an erasure this service cannot read
+    // is a person whose data is still present while the deletion is reported as done.
+    assert.equal((await postEvent(h, signedEvent('identity.user.deleted', {}))).status, 400)
+    assert.equal(
+      (await postEvent(h, signedEvent('identity.user.deleted', { userId: 'nope' }))).status,
+      400,
+    )
+    const badId = signedEvent('identity.user.deleted', { userId: ALICE_ID }, { id: 'not-a-uuid' })
+    assert.equal((await postEvent(h, badId)).status, 400)
+  })
+})
+
+test('with no accept secret configured the route is 503, never an open door', { skip }, async () => {
+  await withServer({ eventAcceptSecrets: [] }, async (h) => {
+    await aTrustedAddress()
+    // The estate's compose has never given policy the outbox secrets, so this state is reachable.
+    // 503 makes the relay retry — the erasure is queued and visible, not lost — and it is emphatically
+    // not "accept anything", which would let an unauthenticated caller erase any user by uuid.
+    const res = await postEvent(h, signedEvent('identity.user.deleted', { userId: ALICE_ID }))
+    assert.equal(res.status, 503)
+
+    const rows = await sql`select count(*)::int as n from trusted_addresses`
+    assert.equal((rows[0] as { n: number }).n, 1)
   })
 })

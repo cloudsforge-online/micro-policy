@@ -6,9 +6,10 @@
  * nowhere else, so the deploy manifest can be derived from it and `env_file: .env` fan-out (which
  * hands every container the whole estate's secrets) has nothing to justify it.
  *
- * Note what is deliberately absent: `OUTBOX_SIGNING_SECRET`. Policy produces no events in this
- * build — the reason is written out in `migrations.ts` — and declaring a secret a service never
- * reads is how a deployment ends up handing out credentials nothing can account for.
+ * Policy still produces no events — the reason is written out in `migrations.ts` — but it now
+ * CONSUMES one, `identity.user.deleted`, and a consumer has to verify the HMAC the producer's
+ * relay put on the body. So `OUTBOX_SIGNING_SECRET` is read here after all, and it is read for
+ * verification only: nothing in this service signs anything.
  */
 
 import { hostname } from 'node:os'
@@ -28,15 +29,61 @@ export class EnvError extends Error {
   }
 }
 
-/**
- * There is no `requiredSecret` here, and the absence is deliberate rather than an omission.
- *
- * The template carries one because it holds an outbox signing key. Policy holds no secret at all:
- * it verifies tokens against identity's public JWKS and signs nothing. Copying the placeholder
- * check in anyway would be a check with no subject, which is worse than no check — it reads, to
- * the next person, as though a secret exists somewhere in this service.
- */
 type Source = Readonly<Record<string, string | undefined>>
+
+const PLACEHOLDERS = new Set([
+  'changeme',
+  'change-me',
+  'placeholder',
+  'secret',
+  'dev-secret',
+  'dev-outbox-signing-secret',
+  'replace-with-a-real-secret',
+  'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+])
+
+/**
+ * The secrets `POST /v1/events` will accept a delivery signature under.
+ *
+ * ── WHY THIS IS OPTIONAL, AND WHAT THE ROUTE DOES WHEN IT IS EMPTY ─────────────────────────────
+ *
+ * Every other variable in this file is required, because rule 9's discipline is that a service
+ * refuses to start rather than serve half-configured. This one is not, and the reason is a fact
+ * about the deploy rather than a preference: policy's compose block has never carried an
+ * `env_file` with the outbox secrets in it, because until now policy neither signed nor verified
+ * anything. Making it required would turn the erasure fix into a service that will not boot on the
+ * live estate — a bigger outage than the gap it closes, on a service every money route consults.
+ *
+ * Unconfigured is NOT silently tolerated. `POST /v1/events` answers **503** when this list is
+ * empty: the relay treats that as a delivery failure and retries, so the event is not lost, it is
+ * queued and visible in the producer's delivery-failure view until somebody sets the variable. The
+ * alternative — verifying against nothing, or accepting unsigned deliveries — would make an
+ * unauthenticated caller able to erase any user by uuid.
+ *
+ * A list rather than a string so the estate's shared key can be rotated one service at a time.
+ */
+function acceptSecretsFrom(source: Source): readonly string[] {
+  const raw = (source['OUTBOX_ACCEPT_SECRETS'] ?? source['OUTBOX_SIGNING_SECRET'] ?? '').trim()
+  if (raw.length === 0) return Object.freeze([])
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+  for (const entry of entries) {
+    // A placeholder or a short key is a configured secret that is worse than an absent one: it
+    // makes the route look guarded. Refused at boot, where it is attributable.
+    if (PLACEHOLDERS.has(entry.toLowerCase())) {
+      throw new EnvError('OUTBOX_ACCEPT_SECRETS contains a known placeholder — generate real secrets')
+    }
+    if (entry.length < 24) {
+      throw new EnvError('OUTBOX_ACCEPT_SECRETS entries must each be at least 24 characters')
+    }
+  }
+  if (new Set(entries).size !== entries.length) {
+    throw new EnvError('OUTBOX_ACCEPT_SECRETS lists the same secret twice')
+  }
+  return Object.freeze(entries)
+}
 
 function required(source: Source, name: string): string {
   const value = source[name]?.trim()
@@ -95,6 +142,13 @@ export interface Env {
    * and none of them is evidence of anything once the window has passed.
    */
   readonly counterRetentionHours: number
+  /**
+   * The secrets `POST /v1/events` accepts a delivery signature under, newest first.
+   *
+   * Empty is a supported state and is NOT "accept anything" — see `acceptSecretsFrom`. The route
+   * answers 503 while it is empty, so the producer retries rather than the event being lost.
+   */
+  readonly eventAcceptSecrets: readonly string[]
 }
 
 const LEVELS = new Set(['debug', 'info', 'warn', 'error'])
@@ -122,6 +176,7 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     instanceId: optional(source, 'INSTANCE_ID', host || 'unknown'),
     decisionRetentionDays: integer(source, 'POLICY_DECISION_RETENTION_DAYS', 730, 90, 3_650),
     counterRetentionHours: integer(source, 'POLICY_COUNTER_RETENTION_HOURS', 48, 2, 720),
+    eventAcceptSecrets: acceptSecretsFrom(source),
   }
 }
 

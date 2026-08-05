@@ -19,11 +19,22 @@
  *
  * The trigger for adding one, written down now so it is a decision rather than an argument: the
  * first `policy.freeze.applied` or `policy.decision.recorded` topic accepted into the registry.
- * At that point migration 8 adds `outbox`, `event_subscriptions` and `outbox_deliveries` verbatim
- * from the template, and `OUTBOX_SIGNING_SECRET` enters `env.ts`. Nothing else changes.
+ * At that point a migration adds `outbox`, `event_subscriptions` and `outbox_deliveries` verbatim
+ * from the template, and an outbound signing secret enters `env.ts`. Nothing else changes. That
+ * trigger has NOT fired: everything below is still consumer-side only.
  *
- * The same reasoning removes `inbox`: policy subscribes to nothing today. The reconciliation
- * drift freeze in SD-10 is what will change that, and it will arrive with the inbox it needs.
+ * ## Why there IS an `inbox`, as of migration 8
+ *
+ * The paragraph that used to sit here said the same reasoning removed the inbox, because "policy
+ * subscribes to nothing today". **That was true and it was also the defect.** Rule 6 of the same
+ * section says every service storing a user reference subscribes to `identity.user.deleted` and
+ * erases, and this service stores a subject on five tables — `policy_decisions`,
+ * `velocity_counters`, `cooling_off_timers`, `trusted_addresses` and `freezes`. Subscribing to
+ * nothing was not a consequence of policy having no upstream; it was a right-to-erasure gap, and a
+ * deletion request was answered "done" while every one of those rows stayed put.
+ *
+ * So migration 8 adds `inbox` and nothing else from the template. The producer half is still
+ * absent, and the two are genuinely separate decisions rather than one package.
  */
 
 import { JOBS_SCHEMA_SQL } from '@cloudsforge/jobs'
@@ -223,6 +234,111 @@ export const MIGRATIONS: readonly Migration[] = [
         note         text,
         primary key (freeze_id, operator)
       );
+    `,
+  },
+  {
+    version: 8,
+    name: 'inbox_and_erasure',
+    up: `
+      -- ════════════════════════════════════════════════════════════════════════════════════════
+      -- THE INBOX ARRIVES. THE OUTBOX STILL DOES NOT.
+      --
+      -- This file's header used to say policy subscribes to nothing, and that half is now spent:
+      -- rule 6 of 03 §2 is not optional for a service holding a subject on five tables, and this
+      -- service holds one on five. So the consumer half lands and the producer half does not — no
+      -- 'outbox', no 'event_subscriptions', no 'outbox_deliveries', no relay job. The trigger for
+      -- those is unchanged and still the first 'policy.*' topic accepted into the registry.
+      --
+      -- Copied verbatim from the sibling services rather than written afresh, so the table the
+      -- dedupe assumes and the table that exists cannot drift.
+      -- ════════════════════════════════════════════════════════════════════════════════════════
+
+      -- Delivery is at-least-once, so the consumer is what makes it effectively-once. The primary
+      -- key is the dedupe: a redelivered event conflicts and the handler is never re-run.
+      create table if not exists inbox (
+        topic       text        not null,
+        event_id    uuid        not null,
+        received_at timestamptz not null default now(),
+        primary key (topic, event_id)
+      );
+
+      -- ════════════════════════════════════════════════════════════════════════════════════════
+      -- ERASURE, AND THE ONE INVARIANT IT NEEDS FROM THE SCHEMA.
+      --
+      -- 'src/erasure.ts' is the table-by-table reasoning and the lawful basis for each row that
+      -- survives. What is here is the part a handler cannot do, which is to make the erasure
+      -- DURABLE rather than a one-shot delete.
+      --
+      -- THE RACE THIS CLOSES. 'trusted_addresses' is written by a user-facing route. A request that
+      -- was in flight when the erasure ran — queued behind a slow decision, retried by a client,
+      -- replayed from a mobile app that had not noticed the account was gone — lands AFTER the
+      -- delete and puts the row straight back. Nothing in the handler can prevent that, because the
+      -- handler has already returned. A trigger reading a durable marker can.
+      --
+      -- ── WHY THIS TABLE IS NOT ITSELF A PRIVACY DEFECT, AND WHEN IT WOULD BE ─────────────────
+      --
+      -- It stores the subject of an erased person, which is the identifier being erased. That is
+      -- defensible in exactly one case and the handler enforces the condition rather than assuming
+      -- it: a row is written ONLY when this service is already lawfully retaining that subject
+      -- somewhere else — a policy_decisions row under the AML/dispute basis, or a freeze. In that
+      -- case the marker adds no identifier the service was not already holding, and it buys the
+      -- guarantee above.
+      --
+      -- Where policy held nothing but preferences, everything is deleted and NO marker is written,
+      -- because recording "this person was erased" would leave behind the only trace of them that
+      -- ever existed here. The trade is stated honestly in 'src/erasure.ts': those subjects get no
+      -- re-insert guard, and a trusted address re-added by an in-flight request would survive until
+      -- somebody noticed.
+      -- ════════════════════════════════════════════════════════════════════════════════════════
+      create table if not exists erased_subjects (
+        subject     text        not null primary key,
+        -- The event's own 'tombstoneAt', not now(). The retention clock an auditor checks runs
+        -- from the deletion request, not from whenever a relay happened to succeed.
+        tombstone_at timestamptz not null,
+        -- The delivery that did it. A random uuid naming an envelope, not a person, and the join
+        -- back to the 'inbox' row that proves the event was received exactly once.
+        event_id    uuid        not null,
+        erased_at   timestamptz not null default now(),
+        constraint erased_subjects_subject_shaped
+          check (subject like 'user:%' or subject like 'community:%' or subject like 'organisation:%')
+      );
+
+      -- A marker is a statement of fact about something that has already happened. Rewriting one
+      -- would change which erasure a retained row is accounted for by, and there is no legitimate
+      -- reason to: a second deletion of the same subject is the same deletion.
+      create or replace function policy_erased_subjects_no_update() returns trigger as $$
+      begin
+        raise exception 'erased_subjects is append-only; a subject is erased once';
+      end;
+      $$ language plpgsql;
+
+      drop trigger if exists erased_subjects_immutable on erased_subjects;
+      create trigger erased_subjects_immutable
+        before update on erased_subjects
+        for each row execute function policy_erased_subjects_no_update();
+
+      -- THE GUARD. A trusted address is a standing authorisation to send money somewhere with less
+      -- friction; re-creating one for a deleted account is the one re-insert here with a real cost.
+      --
+      -- Deliberately NOT applied to velocity_counters or cooling_off_timers. Both are written on
+      -- the decide path, which is a read-shaped route several services call synchronously, and an
+      -- exception raised there would turn a policy lookup into a 500 for a subject nobody should be
+      -- evaluating anyway. They are left to their own prune (POLICY_COUNTER_RETENTION_HOURS,
+      -- 48h by default), which is bounded and already runs.
+      create or replace function policy_refuse_erased_subject() returns trigger as $$
+      begin
+        if exists (select 1 from erased_subjects where subject = new.subject) then
+          raise exception 'subject % has been erased; a trusted address cannot be added', new.subject
+            using errcode = 'integrity_constraint_violation';
+        end if;
+        return new;
+      end;
+      $$ language plpgsql;
+
+      drop trigger if exists trusted_addresses_refuse_erased on trusted_addresses;
+      create trigger trusted_addresses_refuse_erased
+        before insert on trusted_addresses
+        for each row execute function policy_refuse_erased_subject();
     `,
   },
 ]

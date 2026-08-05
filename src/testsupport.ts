@@ -13,8 +13,10 @@
  * Not a test file itself — it is excluded from the build and contains no `test()` call.
  */
 
+import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
 import { migrate, type Sql as DbSql } from '@cloudsforge/db'
+import { EVENT_ID_HEADER, SIGNATURE_HEADER, signDelivery } from '@cloudsforge/contracts-events'
 import { Logger, Metrics, registerHttpMetrics } from '@cloudsforge/telemetry'
 import { MIGRATIONS } from './migrations.ts'
 import { registerServiceMetrics } from './server.ts'
@@ -39,6 +41,8 @@ const ALL_TABLES = [
   'velocity_counters',
   'policy_decisions',
   'policy_rules',
+  'erased_subjects',
+  'inbox',
   'jobs',
 ].join(', ')
 
@@ -64,8 +68,52 @@ export async function resetPolicy(sql: postgres.Sql): Promise<void> {
 
 /* ------------------------------------------------------------------ fixtures */
 
-export const ALICE = 'user:11111111-1111-4111-8111-111111111111'
-export const BOB = 'user:22222222-2222-4222-8222-222222222222'
+export const ALICE_ID = '11111111-1111-4111-8111-111111111111'
+export const BOB_ID = '22222222-2222-4222-8222-222222222222'
+export const ALICE = `user:${ALICE_ID}`
+export const BOB = `user:${BOB_ID}`
+
+/**
+ * The secret the test server accepts event deliveries under.
+ *
+ * At least 24 characters, because `acceptSecretsFrom` refuses anything shorter — a fixture that
+ * the real `loadEnv` would reject is a fixture testing a configuration no deploy can have.
+ */
+export const EVENT_SECRET = 'test-event-secret-0123456789abcdef'
+
+/**
+ * An envelope signed the way identity's relay signs it.
+ *
+ * `signDelivery` is imported from the CONTRACT rather than reimplemented. A hand-rolled signer in
+ * the fixture could be wrong in the same way as a hand-rolled verifier in the service, and the
+ * suite would stay green while every real erasure event was rejected.
+ */
+export function signedEvent(
+  topic: string,
+  payload: Record<string, unknown>,
+  options: { readonly id?: string; readonly secret?: string } = {},
+): { readonly body: string; readonly headers: Record<string, string> } {
+  const id = options.id ?? randomUUID()
+  const body = JSON.stringify({
+    id,
+    topic,
+    key: String(payload['userId'] ?? id),
+    occurredAt: new Date().toISOString(),
+    producer: 'identity',
+    version: 1,
+    actor: null,
+    correlationId: null,
+    payload,
+  })
+  return {
+    body,
+    headers: {
+      'content-type': 'application/json',
+      [SIGNATURE_HEADER]: signDelivery(body, options.secret ?? EVENT_SECRET),
+      [EVENT_ID_HEADER]: id,
+    },
+  }
+}
 export const OPERATOR_ONE = 'operator:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 export const OPERATOR_TWO = 'operator:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 

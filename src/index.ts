@@ -105,6 +105,7 @@ const server = createServer({
   verifier,
   sql: db,
   decide: { sql: db, reader: postgresSnapshotReader(db), metrics, logger },
+  eventAcceptSecrets: env.eventAcceptSecrets,
   // Queue depth and the live freeze count are sampled at scrape time rather than on a timer.
   // There is no `setInterval` in this repository, and CI greps for one — rule 8.
   beforeScrape: async () => {
