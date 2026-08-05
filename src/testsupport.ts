@@ -13,7 +13,7 @@
  * Not a test file itself — it is excluded from the build and contains no `test()` call.
  */
 
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import postgres from 'postgres'
 import { migrate, type Sql as DbSql } from '@cloudsforge/db'
 import { EVENT_ID_HEADER, SIGNATURE_HEADER, signDelivery } from '@cloudsforge/contracts-events'
@@ -76,10 +76,15 @@ export const BOB = `user:${BOB_ID}`
 /**
  * The secret the test server accepts event deliveries under.
  *
- * At least 24 characters, because `acceptSecretsFrom` refuses anything shorter — a fixture that
- * the real `loadEnv` would reject is a fixture testing a configuration no deploy can have.
+ * GENERATED per run, never written. `acceptSecretsFrom` now refuses anything that is not SHAPED
+ * like a generated secret — base64 or hex, 32 decoded bytes, an entropy floor — and the literal
+ * that used to sit here (`test-event-secret-…`) would be refused by the real `loadEnv` on both
+ * counts: it is typed, and it says `testonly`-shaped things about itself. A fixture the deployed
+ * guard would reject is a fixture testing a configuration no deploy can have, and a fixture exempt
+ * from the rule it exercises is how the placeholder in micro-org #142 survived every test in the
+ * estate.
  */
-export const EVENT_SECRET = 'test-event-secret-0123456789abcdef'
+export const EVENT_SECRET = randomBytes(48).toString('base64')
 
 /**
  * An envelope signed the way identity's relay signs it.
