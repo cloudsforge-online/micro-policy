@@ -120,7 +120,7 @@ export const SUBSCRIBED_TOPICS: ReadonlySet<string> = new Set([IDENTITY_USER_DEL
  * This pattern read `[1-5]` for the version and `[89ab]` for the variant — the
  * RFC 4122 shape for versions 1 to 5. **Every user id in this estate is a
  * UUIDv7.** 04-domain-model section 0 requires it ("All ids are UUIDv7,
- * time-ordered, so they index well and sort"), and `identity/src/ids.ts:33`
+ * time-ordered, so they index well and sort"), and `identity/src/ids.ts`
  * mints them.
  *
  * So this regex rejected every real erasure event. The handler answered 400, the
@@ -150,7 +150,7 @@ export interface ErasureCounts {
 /**
  * The two spellings of one person, and why both are matched.
  *
- * The event payload carries a BARE UUID (`identity/src/deletion.ts:113-125`). This service stores
+ * The event payload carries a BARE UUID (`identity/src/deletion.ts`). This service stores
  * the LEDGER SPELLING — `user:<uuid>` — because a decision and the ledger entry it is about must
  * attribute their subject identically; `SUBJECT_PATTERN` in `src/server.ts` is what enforces that
  * on the way in, and `testsupport.ts` fixtures are written the same way.

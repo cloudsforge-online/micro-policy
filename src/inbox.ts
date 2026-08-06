@@ -34,7 +34,7 @@ export type Tx = TransactionSql
  * **The signature scheme is the CONTRACT'S, and that is a fact about identity rather than a
  * preference.**
  *
- * The one producer this service subscribes to is identity, and `identity/src/outbox.ts:48` imports
+ * The one producer this service subscribes to is identity, and `identity/src/outbox.ts` imports
  * `signDelivery` from `@cloudsforge/contracts-events`: `cf-signature: t=<seconds>,v1=<hmac over
  * "<seconds>.<body>">`. Several older services in the estate still sign the local
  * `x-cloudsforge-signature: sha256=<hmac over body>` on their OUTBOUND relay, and a verifier
