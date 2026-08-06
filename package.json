@@ -1,12 +1,14 @@
 {
   "name": "@cloudsforge/policy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "The decision service. Callers submit a subject, an action, a resource and a context, and receive allow, deny, challenge or review with reasons and obligations. It decides; callers enforce.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node --import tsx src/index.ts",
     "migrate": "node --import tsx src/migrator.ts",
