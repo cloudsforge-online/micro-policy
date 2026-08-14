@@ -1,6 +1,6 @@
 {
   "name": "@cloudsforge/policy",
-  "version": "2026.08.45",
+  "version": "2026.08.46",
   "private": true,
   "description": "The decision service. Callers submit a subject, an action, a resource and a context, and receive allow, deny, challenge or review with reasons and obligations. It decides; callers enforce.",
   "license": "MIT",
