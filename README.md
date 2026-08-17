@@ -39,7 +39,7 @@ fail mode that is unavailable at the moment it is needed.
 | `ledger.treasury_spend` | **deny** | a spend from a platform account, not a user's (`src/actions.ts`) |
 | `identity.session.new_device` | **deny** | the first step of every account takeover in the incident history; the availability cost is paid knowingly (`src/actions.ts`) |
 | `wallet.withdrawal` | **deny at or above a floor**, allow below | SHARD 1000, EMBER 100, ETH 0.05, BTC 0.002, XRP 50 (`src/actions.ts`) |
-| `wallet.deposit_address.assign`, `wallet.trusted_address.add`, `market.listing.create`, `trade.order.place`, `mint.deploy.request`, `identity.password.reset`, `api.request` | **allow, and alert** | each is a control whose value is statistical; blocking one request because a table blinked buys nothing (`src/actions.ts`) |
+| `wallet.deposit_address.assign`, `wallet.trusted_address.add`, `market.listing.create`, `trade.order.place`, `mint.deploy.request`, `agora.post.create`, `identity.password.reset`, `api.request` | **allow, and alert** | each is a control whose value is statistical; blocking one request because a table blinked buys nothing (`src/actions.ts`) |
 
 Three properties are worth knowing because they are easy to lose:
 

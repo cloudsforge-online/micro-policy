@@ -151,6 +151,14 @@ export const ACTIONS = Object.freeze({
     failMode: Object.freeze({ kind: 'open' }),
     counted: true,
   }),
+  'agora.post.create': Object.freeze({
+    description: 'Publish to the Agora. Soft per-window caps that keep a scripted flood off the square.',
+    // Open on purpose. The Agora already refuses an unreadable request on its own hourly counter,
+    // so a policy outage costs a second opinion, not the only one — and a square that goes silent
+    // because a table blinked is a worse failure than a burst nobody throttled.
+    failMode: Object.freeze({ kind: 'open' }),
+    counted: true,
+  }),
   'identity.password.reset': Object.freeze({
     description: 'Request a password reset email. Rate limited per subject and per address.',
     failMode: Object.freeze({ kind: 'open' }),
