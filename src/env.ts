@@ -214,8 +214,8 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     version: optional(source, 'CLOUDSFORGE_TAG', 'dev'),
     logLevel: logLevel as Env['logLevel'],
     databaseUrl: required(source, 'POLICY_DATABASE_URL'),
-    databaseUrlTestnet: source['POLICY_DATABASE_URL_TESTNET'] ?? '',
-    singleNetwork: source['CF_NETWORK_SINGLE'] ?? '',
+    databaseUrlTestnet: optional(source, 'POLICY_DATABASE_URL_TESTNET', ''),
+    singleNetwork: optional(source, 'CF_NETWORK_SINGLE', ''),
     // A pool larger than the database's own connection budget divided by the replica count is a
     // service that exhausts Postgres for everything else the moment it scales.
     databasePoolMax: integer(source, 'POLICY_DATABASE_POOL_MAX', 10, 1, 100),
