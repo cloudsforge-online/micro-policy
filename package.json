@@ -36,6 +36,7 @@
     "@cloudsforge/contracts-auth": "link:../contracts/packages/auth",
     "@cloudsforge/contracts-events": "link:../contracts/packages/events",
     "@cloudsforge/db": "file:../runtime/packages/db",
+    "@cloudsforge/http": "file:../runtime/packages/http",
     "@cloudsforge/jobs": "file:../runtime/packages/jobs",
     "@cloudsforge/lifecycle": "file:../runtime/packages/lifecycle",
     "@cloudsforge/secrets": "file:../runtime/packages/secrets",
