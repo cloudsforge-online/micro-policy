@@ -106,6 +106,18 @@ lifecycle
 //    decision.
 const verifier = new Verifier({ jwksUrl: env.identityJwksUrl, issuer: env.identityIssuer })
 const db = sql as unknown as Db
+// ── WHICH ESTATE THIS DEPLOYMENT IS ─────────────────────────────────────────────────────────
+//
+// The `networkSql` key below used to be the literal `mainnet`. Same image, same code,
+// different env — so the TESTNET pod registered its testnet DSN under the name `mainnet` and
+// then refused every request the gateway stamped `CF-Network: testnet`, because it genuinely
+// held no handle by that name. Five services crash-looped on it within ten minutes of the
+// first deploy: the refusal was right, the registration was wrong.
+//
+// `CF_NETWORK_SINGLE` is how a single-network pod says which estate it is. The render sets it
+// for every deployment; `mainnet` remains the default only for a bare `pnpm dev`.
+const ownNetwork = (env.singleNetwork || 'mainnet') as 'mainnet' | 'testnet'
+
 const server = createServer({
   lifecycle,
   logger,
@@ -115,10 +127,14 @@ const server = createServer({
   // in server.ts replaces it — and its snapshot reader — with the request's network before any
   // route runs.
   sql: networkSql({
-    mainnet: sql as unknown as RuntimeSql,
+    [ownNetwork]: sql as unknown as RuntimeSql,
     ...(sqlTestnet ? { testnet: sqlTestnet as unknown as RuntimeSql } : {}),
   }),
-  ...(env.singleNetwork ? { singleNetwork: env.singleNetwork as 'mainnet' | 'testnet' } : {}),
+  // The fallback for a request with no `CF-Network` header — which is EVERY service-to-service
+  // call, because those go container to container and never reach the gateway that stamps one.
+  // `requestNetwork` still prefers the header, so this cannot mask a mis-stamped external
+  // request; it only answers the internal callers that never had one.
+  singleNetwork: ownNetwork,
   decide: { sql: db, reader: postgresSnapshotReader(db), metrics, logger },
   eventAcceptSecrets: env.eventAcceptSecrets,
   // Queue depth and the live freeze count are sampled at scrape time rather than on a timer.
