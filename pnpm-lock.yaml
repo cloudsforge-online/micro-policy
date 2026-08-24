@@ -20,6 +20,9 @@ importers:
       '@cloudsforge/db':
         specifier: file:../runtime/packages/db
         version: file:../runtime/packages/db
+      '@cloudsforge/http':
+        specifier: file:../runtime/packages/http
+        version: file:../runtime/packages/http
       '@cloudsforge/jobs':
         specifier: file:../runtime/packages/jobs
         version: file:../runtime/packages/jobs
@@ -57,6 +60,10 @@ packages:
 
   '@cloudsforge/db@file:../runtime/packages/db':
     resolution: {directory: ../runtime/packages/db, type: directory}
+    engines: {node: '>=22'}
+
+  '@cloudsforge/http@file:../runtime/packages/http':
+    resolution: {directory: ../runtime/packages/http, type: directory}
     engines: {node: '>=22'}
 
   '@cloudsforge/jobs@file:../runtime/packages/jobs':
@@ -277,6 +284,8 @@ snapshots:
   '@cloudsforge/db@file:../runtime/packages/db':
     dependencies:
       postgres: 3.4.9
+
+  '@cloudsforge/http@file:../runtime/packages/http': {}
 
   '@cloudsforge/jobs@file:../runtime/packages/jobs':
     dependencies:
