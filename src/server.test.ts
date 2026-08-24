@@ -20,7 +20,17 @@ import type postgres from 'postgres'
 import { SignJWT, generateKeyPair } from 'jose'
 import { AUDIENCE, Verifier } from '@cloudsforge/auth'
 import { Lifecycle } from '@cloudsforge/lifecycle'
+import { networkSql, type Sql as RuntimeSql } from '@cloudsforge/db'
 import { DECIDE_SCOPE, createServer } from './server.ts'
+
+/**
+ * One handle, presented as the per-network selector the server now takes.
+ *
+ * The fixtures run against a single test database, so mainnet is the only configured network —
+ * which means these tests exercise the REFUSAL path for free: anything reaching for testnet here
+ * throws rather than quietly reusing this handle.
+ */
+const singleNetworkSql = (db: unknown) => networkSql({ mainnet: db as RuntimeSql })
 import {
   ALICE,
   EVENT_SECRET,
@@ -98,7 +108,8 @@ async function withServer(
     logger: quietLogger(),
     metrics,
     verifier: options.verifier ?? workingVerifier(),
-    sql: db(),
+    sql: singleNetworkSql(db()),
+    singleNetwork: 'mainnet' as const,
     eventAcceptSecrets: options.eventAcceptSecrets ?? [EVENT_SECRET],
     decide: { ...decideDeps(db()), metrics, logger: quietLogger() },
   })
